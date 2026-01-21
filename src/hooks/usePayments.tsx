@@ -1,9 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { Payment, PaymentWithTenant } from '@/types/database';
+import { Payment, PaymentWithTenant, PaymentTransaction } from '@/types/database';
 import { toast } from '@/hooks/use-toast';
 
-export function usePayments(status?: 'pending' | 'paid' | 'overdue') {
+export function usePayments(status?: 'pending' | 'paid' | 'overdue' | 'partial' | 'partial_overdue') {
   return useQuery({
     queryKey: ['payments', status],
     queryFn: async () => {
@@ -52,7 +52,7 @@ export function useTodaysDuePayments() {
           )
         `)
         .eq('due_date', today)
-        .eq('status', 'pending')
+        .in('status', ['pending', 'partial'])
         .order('created_at');
       
       if (error) throw error;
@@ -80,7 +80,7 @@ export function useOverduePayments() {
           )
         `)
         .lt('due_date', today)
-        .in('status', ['pending', 'overdue'])
+        .in('status', ['pending', 'overdue', 'partial', 'partial_overdue'])
         .order('due_date', { ascending: true });
       
       if (error) throw error;
@@ -111,10 +111,10 @@ export function useCreatePayment() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: async (payment: Omit<Payment, 'id' | 'created_at' | 'updated_at' | 'paid_date' | 'marked_by'>) => {
+    mutationFn: async (payment: Omit<Payment, 'id' | 'created_at' | 'updated_at' | 'paid_date' | 'marked_by' | 'amount_paid'>) => {
       const { data, error } = await supabase
         .from('payments')
-        .insert(payment)
+        .insert({ ...payment, amount_paid: 0 })
         .select()
         .single();
       
@@ -123,6 +123,7 @@ export function useCreatePayment() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payments'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       toast({ title: 'Payment record created' });
     },
     onError: (error: Error) => {
@@ -136,14 +137,70 @@ export function useMarkPaymentPaid() {
   
   return useMutation({
     mutationFn: async ({ id, userId }: { id: string; userId: string }) => {
-      const { data, error } = await supabase
+      // Get payment details
+      const { data: payment } = await supabase
         .from('payments')
-        .update({ 
-          status: 'paid', 
-          paid_date: new Date().toISOString().split('T')[0],
-          marked_by: userId
-        })
+        .select('amount, amount_paid')
         .eq('id', id)
+        .single();
+      
+      if (!payment) throw new Error('Payment not found');
+      
+      const remainingAmount = payment.amount - payment.amount_paid;
+      
+      // Add a transaction for the remaining amount
+      const { error: transactionError } = await supabase
+        .from('payment_transactions')
+        .insert({
+          payment_id: id,
+          amount: remainingAmount,
+          payment_date: new Date().toISOString().split('T')[0],
+          note: 'Marked as fully paid',
+          created_by: userId,
+        });
+      
+      if (transactionError) throw transactionError;
+      
+      return { success: true };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      toast({ title: 'Payment marked as paid' });
+    },
+    onError: (error: Error) => {
+      toast({ title: 'Error updating payment', description: error.message, variant: 'destructive' });
+    },
+  });
+}
+
+// Add partial payment
+export function useAddPaymentTransaction() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: async ({ 
+      paymentId, 
+      amount, 
+      paymentDate, 
+      note, 
+      userId 
+    }: { 
+      paymentId: string; 
+      amount: number; 
+      paymentDate: string;
+      note?: string;
+      userId: string;
+    }) => {
+      const { data, error } = await supabase
+        .from('payment_transactions')
+        .insert({
+          payment_id: paymentId,
+          amount,
+          payment_date: paymentDate,
+          note: note || null,
+          created_by: userId,
+        })
         .select()
         .single();
       
@@ -152,11 +209,30 @@ export function useMarkPaymentPaid() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payments'] });
-      toast({ title: 'Payment marked as paid' });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      toast({ title: 'Payment recorded successfully' });
     },
     onError: (error: Error) => {
-      toast({ title: 'Error updating payment', description: error.message, variant: 'destructive' });
+      toast({ title: 'Error recording payment', description: error.message, variant: 'destructive' });
     },
+  });
+}
+
+// Get payment transactions for a specific payment
+export function usePaymentTransactions(paymentId: string) {
+  return useQuery({
+    queryKey: ['payment_transactions', paymentId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('payment_transactions')
+        .select('*')
+        .eq('payment_id', paymentId)
+        .order('payment_date', { ascending: false });
+      
+      if (error) throw error;
+      return data as PaymentTransaction[];
+    },
+    enabled: !!paymentId,
   });
 }
 

@@ -3,6 +3,7 @@ import { DashboardLayout } from '@/components/layout/DashboardLayout';
 import { usePayments, useMarkPaymentPaid, useCreatePayment, useTodaysDuePayments, useOverduePayments } from '@/hooks/usePayments';
 import { useTenants } from '@/hooks/useTenants';
 import { useAuth } from '@/hooks/useAuth';
+import { PaymentWithTenant, getPaymentBalance, isPaymentPartial } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
@@ -11,9 +12,11 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Check, MessageCircle, CreditCard, AlertCircle } from 'lucide-react';
+import { Plus, Check, MessageCircle, CreditCard, AlertCircle, History } from 'lucide-react';
 import { formatCurrency, formatDate, getMonthName, generateWhatsAppLink } from '@/lib/helpers';
 import { cn } from '@/lib/utils';
+import { AddPaymentDialog } from '@/components/payments/AddPaymentDialog';
+import { PaymentHistoryDialog } from '@/components/payments/PaymentHistoryDialog';
 
 export default function Payments() {
   const { user, isOwner } = useAuth();
@@ -32,19 +35,25 @@ export default function Payments() {
     due_date: '',
   });
 
+  // Dialogs for partial payments
+  const [selectedPayment, setSelectedPayment] = useState<PaymentWithTenant | null>(null);
+  const [addPaymentOpen, setAddPaymentOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   const handleMarkPaid = (paymentId: string) => {
     if (user) {
       markPaid.mutate({ id: paymentId, userId: user.id });
     }
   };
 
-  const handleWhatsAppReminder = (payment: any) => {
+  const handleWhatsAppReminder = (payment: PaymentWithTenant) => {
     if (!payment.tenant) return;
     
+    const balance = getPaymentBalance(payment);
     const link = generateWhatsAppLink(
       payment.tenant.phone,
       payment.tenant.name,
-      payment.amount,
+      balance,
       getMonthName(payment.month)
     );
     
@@ -75,14 +84,30 @@ export default function Payments() {
     });
   };
 
-  const getStatusBadge = (status: string, dueDate: string) => {
-    const today = new Date().toISOString().split('T')[0];
-    const isOverdue = status === 'pending' && dueDate < today;
+  const handleAddPayment = (payment: PaymentWithTenant) => {
+    setSelectedPayment(payment);
+    setAddPaymentOpen(true);
+  };
+
+  const handleViewHistory = (payment: PaymentWithTenant) => {
+    setSelectedPayment(payment);
+    setHistoryOpen(true);
+  };
+
+  const getStatusBadge = (payment: PaymentWithTenant) => {
+    const status = payment.status;
+    const balance = getPaymentBalance(payment);
     
-    if (status === 'paid') {
+    if (status === 'paid' || balance <= 0) {
       return <span className="px-2 py-1 rounded-full text-xs font-medium bg-success/10 text-success">Paid</span>;
     }
-    if (isOverdue || status === 'overdue') {
+    if (status === 'partial' || status === 'partial_overdue') {
+      const badgeClass = status === 'partial_overdue' 
+        ? "bg-destructive/10 text-destructive"
+        : "bg-warning/10 text-warning";
+      return <span className={`px-2 py-1 rounded-full text-xs font-medium ${badgeClass}`}>Partial</span>;
+    }
+    if (status === 'overdue') {
       return <span className="px-2 py-1 rounded-full text-xs font-medium bg-destructive/10 text-destructive">Overdue</span>;
     }
     return <span className="px-2 py-1 rounded-full text-xs font-medium bg-warning/10 text-warning">Pending</span>;
@@ -269,66 +294,100 @@ export default function Payments() {
                             <TableHead>Tenant</TableHead>
                             <TableHead>Location</TableHead>
                             <TableHead>Period</TableHead>
-                            <TableHead>Amount</TableHead>
+                            <TableHead>Rent</TableHead>
+                            <TableHead>Paid</TableHead>
+                            <TableHead>Balance</TableHead>
                             <TableHead>Due Date</TableHead>
                             <TableHead>Status</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {payments.map((payment) => (
-                            <TableRow key={payment.id}>
-                              <TableCell className="font-medium">
-                                {payment.tenant?.name || 'Unknown'}
-                              </TableCell>
-                              <TableCell>
-                                {payment.tenant?.room ? (
-                                  <span>
-                                    {payment.tenant.room.building?.name} - Room {payment.tenant.room.room_number}
-                                  </span>
-                                ) : '-'}
-                              </TableCell>
-                              <TableCell>
-                                {getMonthName(payment.month)} {payment.year}
-                              </TableCell>
-                              <TableCell className="font-medium">
-                                {formatCurrency(payment.amount)}
-                              </TableCell>
-                              <TableCell>
-                                {formatDate(payment.due_date)}
-                              </TableCell>
-                              <TableCell>
-                                {getStatusBadge(payment.status, payment.due_date)}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <div className="flex justify-end gap-1">
-                                  {payment.status !== 'paid' && (
-                                    <>
-                                      <Button
-                                        size="icon"
-                                        variant="ghost"
-                                        className="text-success hover:text-success hover:bg-success/10"
-                                        onClick={() => handleWhatsAppReminder(payment)}
-                                        title="Send WhatsApp Reminder"
-                                      >
-                                        <MessageCircle className="h-4 w-4" />
-                                      </Button>
-                                      <Button
-                                        size="icon"
-                                        variant="ghost"
-                                        className="text-success hover:text-success hover:bg-success/10"
-                                        onClick={() => handleMarkPaid(payment.id)}
-                                        disabled={markPaid.isPending}
-                                        title="Mark as Paid"
-                                      >
-                                        <Check className="h-4 w-4" />
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                          {payments.map((payment) => {
+                            const balance = getPaymentBalance(payment);
+                            const isPartial = isPaymentPartial(payment);
+                            
+                            return (
+                              <TableRow key={payment.id}>
+                                <TableCell className="font-medium">
+                                  {payment.tenant?.name || 'Unknown'}
+                                </TableCell>
+                                <TableCell>
+                                  {payment.tenant?.room ? (
+                                    <span>
+                                      {payment.tenant.room.building?.name} - Room {payment.tenant.room.room_number}
+                                    </span>
+                                  ) : '-'}
+                                </TableCell>
+                                <TableCell>
+                                  {getMonthName(payment.month)} {payment.year}
+                                </TableCell>
+                                <TableCell className="font-medium">
+                                  {formatCurrency(payment.amount)}
+                                </TableCell>
+                                <TableCell className="text-success font-medium">
+                                  {formatCurrency(payment.amount_paid)}
+                                </TableCell>
+                                <TableCell className={cn(
+                                  "font-medium",
+                                  balance > 0 ? "text-destructive" : "text-success"
+                                )}>
+                                  {formatCurrency(balance)}
+                                </TableCell>
+                                <TableCell>
+                                  {formatDate(payment.due_date)}
+                                </TableCell>
+                                <TableCell>
+                                  {getStatusBadge(payment)}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <div className="flex justify-end gap-1">
+                                    {payment.status !== 'paid' && balance > 0 && (
+                                      <>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="text-primary hover:text-primary hover:bg-primary/10"
+                                          onClick={() => handleAddPayment(payment)}
+                                          title="Add Payment"
+                                        >
+                                          <Plus className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="text-success hover:text-success hover:bg-success/10"
+                                          onClick={() => handleWhatsAppReminder(payment)}
+                                          title="Send WhatsApp Reminder"
+                                        >
+                                          <MessageCircle className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="text-success hover:text-success hover:bg-success/10"
+                                          onClick={() => handleMarkPaid(payment.id)}
+                                          disabled={markPaid.isPending}
+                                          title="Mark as Fully Paid"
+                                        >
+                                          <Check className="h-4 w-4" />
+                                        </Button>
+                                      </>
+                                    )}
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="text-muted-foreground hover:text-foreground"
+                                      onClick={() => handleViewHistory(payment)}
+                                      title="View Payment History"
+                                    >
+                                      <History className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
@@ -339,6 +398,18 @@ export default function Payments() {
           })}
         </Tabs>
       </div>
+
+      {/* Dialogs */}
+      <AddPaymentDialog 
+        payment={selectedPayment}
+        open={addPaymentOpen}
+        onOpenChange={setAddPaymentOpen}
+      />
+      <PaymentHistoryDialog
+        payment={selectedPayment}
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+      />
     </DashboardLayout>
   );
 }
