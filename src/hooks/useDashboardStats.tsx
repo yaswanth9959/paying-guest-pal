@@ -42,20 +42,20 @@ export function useDashboardStats() {
       const vacantBeds = totalCapacity - occupiedBeds;
       const occupancyRate = totalCapacity > 0 ? (occupiedBeds / totalCapacity) * 100 : 0;
 
-      // Get today's due payments count
+      // Get today's due payments count (pending or partial with balance > 0)
       const today = new Date().toISOString().split('T')[0];
       const { count: todaysDue } = await supabase
         .from('payments')
         .select('*', { count: 'exact', head: true })
         .eq('due_date', today)
-        .eq('status', 'pending');
+        .in('status', ['pending', 'partial']);
 
-      // Get overdue payments count
+      // Get overdue payments count (any status with balance > 0 and past due date)
       const { count: overdueCount } = await supabase
         .from('payments')
         .select('*', { count: 'exact', head: true })
         .lt('due_date', today)
-        .in('status', ['pending', 'overdue']);
+        .in('status', ['pending', 'overdue', 'partial', 'partial_overdue']);
 
       // Get current month's revenue
       const currentMonth = new Date().getMonth() + 1;

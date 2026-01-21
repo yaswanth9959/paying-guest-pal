@@ -44,9 +44,48 @@ export type Database = {
         }
         Relationships: []
       }
+      payment_transactions: {
+        Row: {
+          amount: number
+          created_at: string
+          created_by: string | null
+          id: string
+          note: string | null
+          payment_date: string
+          payment_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string | null
+          payment_date?: string
+          payment_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          note?: string | null
+          payment_date?: string
+          payment_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_transactions_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "payments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payments: {
         Row: {
           amount: number
+          amount_paid: number
           created_at: string
           due_date: string
           id: string
@@ -60,6 +99,7 @@ export type Database = {
         }
         Insert: {
           amount: number
+          amount_paid?: number
           created_at?: string
           due_date: string
           id?: string
@@ -73,6 +113,7 @@ export type Database = {
         }
         Update: {
           amount?: number
+          amount_paid?: number
           created_at?: string
           due_date?: string
           id?: string
